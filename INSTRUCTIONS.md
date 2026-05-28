@@ -64,7 +64,35 @@ sudo -u postgres psql -d myinfoapp -c "INSERT INTO \"Household\" (\"Name\") VALU
 
 ---
 
-## Deploy to DigitalOcean (update the live site)
+## Auto-deploy with GitHub Actions (from phone or anywhere)
+
+When you **push to `main`**, GitHub deploys to the droplet automatically.
+
+**One-time setup:** add secret `DEPLOY_KEY` in GitHub (see below).
+
+**After that:** Claude on your phone → push to GitHub → site updates in ~1–2 minutes.
+
+Check runs: https://github.com/menachem4707-cmyk/myinfoapp/actions
+
+### One-time: add DEPLOY_KEY secret
+
+1. Open https://github.com/menachem4707-cmyk/myinfoapp/settings/secrets/actions
+2. **New repository secret**
+3. Name: `DEPLOY_KEY`
+4. Value: entire contents of `C:\Users\MendyPosner\.ssh\id_deploy` (the private key file)
+5. Save
+
+Copy key to clipboard (PowerShell):
+
+```powershell
+Get-Content $env:USERPROFILE\.ssh\id_deploy | Set-Clipboard
+```
+
+---
+
+## Deploy to DigitalOcean manually (from your PC)
+
+Use this if GitHub Actions fails or you want to deploy without pushing to Git.
 
 Do this after you change `server.js` or `package.json` on your PC.
 
