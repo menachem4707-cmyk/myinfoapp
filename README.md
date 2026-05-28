@@ -1,6 +1,8 @@
-# My First App (DigitalOcean)
+# MyInfoApp (DigitalOcean)
 
-Starter Node.js app deployed on a DigitalOcean droplet. Use this as a reference for future projects.
+Starter Node.js app deployed on a DigitalOcean droplet.
+
+**Full step-by-step instructions:** see [INSTRUCTIONS.md](./INSTRUCTIONS.md)
 
 ## Live site
 
@@ -10,6 +12,10 @@ http://137.184.132.232
 
 `C:\Users\MendyPosner\my-first-app`
 
+## GitHub
+
+https://github.com/menachem4707-cmyk/myinfoapp
+
 ## Deploy
 
 ```powershell
@@ -17,7 +23,7 @@ cd C:\Users\MendyPosner\my-first-app
 .\deploy.ps1
 ```
 
-Deploy uses `C:\Users\MendyPosner\.ssh\id_deploy` (no passphrase). Do not commit private keys.
+See [INSTRUCTIONS.md](./INSTRUCTIONS.md) for deploy and git push steps (one at a time).
 
 ## Server details
 
