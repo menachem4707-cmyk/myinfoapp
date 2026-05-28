@@ -22,6 +22,34 @@ Use this file when you come back to the project or ask Cursor for help.
 | Live website | http://137.184.132.232 |
 | Droplet IP | `137.184.132.232` |
 | App on server | `/var/www/myapp` |
+| SQL database | PostgreSQL — database name `myinfoapp` |
+| DB password | `/var/www/myapp/.env` on server only (not in GitHub) |
+
+---
+
+## Database (PostgreSQL)
+
+| Item | Value |
+|------|--------|
+| Engine | PostgreSQL 16 |
+| Database | `myinfoapp` |
+| Table | `Household` |
+| Columns | `id` (auto), `Name` (TEXT) |
+| Schema file | `schema.sql` in this project |
+
+### View table on server (one step)
+
+SSH in, then run:
+
+```bash
+sudo -u postgres psql -d myinfoapp -c 'SELECT * FROM "Household";'
+```
+
+### Add a test row (one step)
+
+```bash
+sudo -u postgres psql -d myinfoapp -c "INSERT INTO \"Household\" (\"Name\") VALUES ('Smith Family');"
+```
 
 ---
 
