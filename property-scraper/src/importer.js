@@ -6,6 +6,7 @@ const { pool } = require("./db");
 const {
   parseCsv,
   remapRecord,
+  deriveCities,
   CITY_COLS,
   PROPERTY_COLS,
 } = require("./csv");
@@ -53,41 +54,23 @@ async function upsertRow(client, table, allowedCols, record) {
   );
 }
 
-const TABLE_FOR_TYPE = { cities: "cities", properties: "properties" };
-const COLS_FOR_TYPE = { cities: CITY_COLS, properties: PROPERTY_COLS };
-
-// Import an array of records of a given type (cities|properties).
-// Remaps Salesforce headers -> DB columns, upserts per row, captures errors.
-async function importRecords(client, type, records, report, logger) {
-  const table = TABLE_FOR_TYPE[type];
-  const allowedCols = COLS_FOR_TYPE[type];
+// Upsert a list of remapped city records. Returns count of successes.
+async function upsertCities(client, cities, report) {
   let ok = 0;
-
-  for (let i = 0; i < records.length; i++) {
-    const { record, unmapped } = remapRecord(records[i], type);
-    for (const u of unmapped) report.unmapped[type].add(u);
-
+  for (const city of cities) {
     try {
-      await upsertRow(client, table, allowedCols, record);
+      await upsertRow(client, "cities", CITY_COLS, city);
       ok += 1;
     } catch (err) {
-      report.errors.push({
-        type,
-        id: record.id,
-        message: err.message,
-      });
-    }
-
-    if (logger && (i + 1) % 1000 === 0) {
-      logger(`${type}: ${i + 1}/${records.length} processed`);
+      report.errors.push({ type: "cities", id: city.id, message: err.message });
     }
   }
-
   return ok;
 }
 
 // Import cities then properties (order matters for the FK).
 // data: { cities?: [...], properties?: [...] }
+// Properties that carry City__r.* relationship columns auto-derive their city.
 // Returns { cities, properties, errors, unmapped }.
 async function importData(data, logger) {
   const report = {
@@ -99,23 +82,54 @@ async function importData(data, logger) {
 
   const client = await pool.connect();
   try {
+    // 1) Explicit cities file, if provided.
     if (data.cities && data.cities.length) {
-      report.cities = await importRecords(
-        client,
-        "cities",
-        data.cities,
-        report,
-        logger
-      );
+      const remappedCities = data.cities.map((raw) => {
+        const { record, unmapped } = remapRecord(raw, "cities");
+        unmapped.forEach((u) => report.unmapped.cities.add(u));
+        return record;
+      });
+      report.cities += await upsertCities(client, remappedCities, report);
     }
+
+    // 2) Properties: remap up front, derive any cities from relationship cols.
     if (data.properties && data.properties.length) {
-      report.properties = await importRecords(
-        client,
-        "properties",
-        data.properties,
-        report,
-        logger
-      );
+      const remapped = data.properties.map((raw) => {
+        const { record, unmapped } = remapRecord(raw, "properties");
+        unmapped.forEach((u) => report.unmapped.properties.add(u));
+        return record;
+      });
+
+      const derived = deriveCities(remapped);
+      if (derived.length) {
+        const n = await upsertCities(client, derived, report);
+        report.cities += n;
+        if (logger) logger(`derived ${n} cities from property rows`);
+      }
+
+      for (let i = 0; i < remapped.length; i++) {
+        const rec = remapped[i];
+        if (rec.__city_district != null && rec.city_id == null) {
+          rec.city_id = String(rec.__city_district).trim() || null;
+        }
+        delete rec.__city_name;
+        delete rec.__city_district;
+
+        try {
+          await upsertRow(client, "properties", PROPERTY_COLS, rec);
+          report.properties += 1;
+        } catch (err) {
+          report.errors.push({
+            type: "properties",
+            id: rec.id,
+            message: err.message,
+          });
+        }
+
+        if (logger && (i + 1) % 1000 === 0) {
+          logger(`properties: ${i + 1}/${remapped.length} processed`);
+        }
+      }
     }
   } finally {
     client.release();

@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { parseCsv, remapRecord } = require("../src/csv");
+const { parseCsv, remapRecord, deriveCities } = require("../src/csv");
 
 test("parseCsv reads headers and rows, handling quotes and CRLF", () => {
   const csv =
@@ -53,7 +53,7 @@ test("remapRecord maps Salesforce property headers (City__c -> city_id)", () => 
       Block__c: "388",
       Lot__c: "12",
       Yiddish__c: "true",
-      CreatedDate: "2021-01-01",
+      Some_Other__c: "x",
     },
     "properties"
   );
@@ -61,8 +61,61 @@ test("remapRecord maps Salesforce property headers (City__c -> city_id)", () => 
   assert.strictEqual(record.city_id, "a01");
   assert.strictEqual(record.block, "388");
   assert.strictEqual(record.lot, "12");
-  // Unknown Salesforce columns are reported, not silently included.
-  assert.deepStrictEqual(unmapped, ["CreatedDate"]);
+  // Truly unknown columns are reported, not silently included.
+  assert.deepStrictEqual(unmapped, ["Some_Other__c"]);
+});
+
+test("remapRecord ignores Salesforce formula/audit columns silently", () => {
+  const { record, unmapped } = remapRecord(
+    {
+      Id: "a02",
+      Price__c: "150000",
+      Date_Of_Sale__c: "2021-01-01",
+      Block_Period__c: "false",
+      Lot_Period__c: "false",
+      Url__c: "http://x",
+      CreatedDate: "2021-01-01",
+    },
+    "properties"
+  );
+  assert.deepStrictEqual(record, { id: "a02" });
+  assert.deepStrictEqual(unmapped, []);
+});
+
+test("remapRecord carries City__r.* relationship hints", () => {
+  const { record } = remapRecord(
+    {
+      Id: "a02",
+      Block__c: "87",
+      Lot__c: "1",
+      "City__r.Name": "Linden",
+      "City__r.District_Code__c": "2009",
+    },
+    "properties"
+  );
+  assert.strictEqual(record.__city_name, "Linden");
+  assert.strictEqual(record.__city_district, "2009");
+});
+
+test("deriveCities builds distinct cities keyed by district code", () => {
+  const props = [
+    { id: "p1", __city_name: "Linden", __city_district: "2009" },
+    { id: "p2", __city_name: "Linden", __city_district: "2009" },
+    { id: "p3", __city_name: "Lakewood", __city_district: "1515" },
+    { id: "p4" }, // no district -> ignored
+  ];
+  const cities = deriveCities(props);
+  assert.strictEqual(cities.length, 2);
+  assert.deepStrictEqual(cities[0], {
+    id: "2009",
+    name: "Linden",
+    district_code: "2009",
+  });
+  assert.deepStrictEqual(cities[1], {
+    id: "1515",
+    name: "Lakewood",
+    district_code: "1515",
+  });
 });
 
 test("remapRecord is case-insensitive and accepts DB column names directly", () => {

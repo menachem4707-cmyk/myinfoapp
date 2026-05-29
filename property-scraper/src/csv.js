@@ -55,6 +55,27 @@ const PROPERTY_ALIASES = {
   notes__c: "notes",
   yiddish__c: "yiddish",
   bobov__c: "bobov",
+  // Relationship columns (no City__c Id in the export): carry city name +
+  // district code as hints so the importer can auto-derive the city row.
+  "city__r.name": "__city_name",
+  "city__r.district_code__c": "__city_district",
+  "city__r.district_code": "__city_district",
+};
+
+// Salesforce formula / audit columns we intentionally skip (computed on read
+// or not stored). Listed so they are NOT reported as surprising "unmapped".
+const IGNORED_COLS = {
+  cities: new Set(["createddate", "lastmodifieddate", "isdeleted"]),
+  properties: new Set([
+    "price__c",
+    "date_of_sale__c",
+    "block_period__c",
+    "lot_period__c",
+    "url__c",
+    "createddate",
+    "lastmodifieddate",
+    "isdeleted",
+  ]),
 };
 
 function buildAliasMap(cols, aliases) {
@@ -71,17 +92,20 @@ const ALIAS_MAPS = {
 
 // Remap one record's keys (Salesforce headers) to DB columns for `type`.
 // Returns { record: {dbCol: value}, unmapped: [originalHeader, ...] }.
+// Known formula/audit columns are skipped silently (not reported as unmapped).
 function remapRecord(record, type) {
   const aliasMap = ALIAS_MAPS[type];
   if (!aliasMap) throw new Error(`unknown import type: ${type}`);
+  const ignored = IGNORED_COLS[type] || new Set();
 
   const out = {};
   const unmapped = [];
   for (const [key, value] of Object.entries(record)) {
-    const dbCol = aliasMap[norm(key)];
+    const n = norm(key);
+    const dbCol = aliasMap[n];
     if (dbCol) {
       out[dbCol] = value;
-    } else {
+    } else if (!ignored.has(n)) {
       unmapped.push(key);
     }
   }
@@ -144,10 +168,32 @@ function parseCsv(text) {
     });
 }
 
+// Derive distinct city rows from remapped property records that carry the
+// relationship hints (__city_district / __city_name). Keyed by district code,
+// which is used as the synthetic city id (the export has no City__c Id).
+function deriveCities(remappedProperties) {
+  const map = new Map();
+  for (const r of remappedProperties) {
+    const district =
+      r.__city_district != null ? String(r.__city_district).trim() : "";
+    if (!district) continue;
+    if (!map.has(district)) {
+      map.set(district, {
+        id: district,
+        name: r.__city_name != null ? String(r.__city_name).trim() : null,
+        district_code: district,
+      });
+    }
+  }
+  return Array.from(map.values());
+}
+
 module.exports = {
   parseCsv,
   remapRecord,
+  deriveCities,
   CITY_COLS,
   PROPERTY_COLS,
   ALIAS_MAPS,
+  IGNORED_COLS,
 };
