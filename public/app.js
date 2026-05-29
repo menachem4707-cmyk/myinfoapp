@@ -411,8 +411,13 @@ function buildColumns() {
     textCol("owner_name", "Owner", { minWidth: 170, widthGrow: 2 }),
     textCol("owner_street", "Owner street", { minWidth: 150 }),
     textCol("city_state", "City / State", { minWidth: 140 }),
-    textCol("sale_date", "Sale date", { width: 110 }),
-    textCol("sale_price", "Sale price", { width: 110 }),
+    {
+      title: "Sale date",
+      field: "date_of_sale",
+      formatter: (cell) => fmtDate(cell.getValue()),
+      width: 110,
+      headerSort: true,
+    },
     {
       title: "Price",
       field: "price",
