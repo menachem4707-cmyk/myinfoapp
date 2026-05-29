@@ -61,6 +61,43 @@ CREATE TABLE IF NOT EXISTS resync_runs (
   status      TEXT DEFAULT 'running'           -- running | completed | failed
 );
 
+-- Error-safe parser for Sale_Date__c "MM/DD/YY" -> DATE. Returns NULL for any
+-- blank / malformed / out-of-range value (e.g. 00/00/00, 02/30/21) instead of
+-- raising, so reads over the whole table never fail.
+CREATE OR REPLACE FUNCTION safe_sale_date(s text) RETURNS date AS $$
+BEGIN
+  IF s IS NULL OR s !~ '^[0-9]{2}/[0-9]{2}/[0-9]{2}' THEN
+    RETURN NULL;
+  END IF;
+  RETURN make_date(
+    CASE
+      WHEN substring(s from 7 for 2)::int > 35
+        THEN 1900 + substring(s from 7 for 2)::int
+      ELSE 2000 + substring(s from 7 for 2)::int
+    END,
+    substring(s from 1 for 2)::int,
+    substring(s from 4 for 2)::int
+  );
+EXCEPTION WHEN others THEN
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+-- Error-safe numeric parse for Sale_Price__c. Returns NULL for blank / values
+-- that cannot be cast (instead of raising).
+CREATE OR REPLACE FUNCTION safe_price(s text) RETURNS numeric AS $$
+DECLARE
+  cleaned text;
+BEGIN
+  IF s IS NULL THEN RETURN NULL; END IF;
+  cleaned := regexp_replace(s, '[^0-9.]', '', 'g');
+  IF cleaned = '' OR cleaned = '.' THEN RETURN NULL; END IF;
+  RETURN cleaned::numeric;
+EXCEPTION WHEN others THEN
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
 -- Read view exposing the Salesforce formula fields that can be computed in SQL.
 -- NOTE: Url__c is intentionally NOT computed here; it is built in code
 -- (src/urlBuilder.js) where it must match the Salesforce formula byte-for-byte.
@@ -69,23 +106,6 @@ SELECT
   p.*,
   (p.block LIKE '%.%') AS block_period,
   (p.lot   LIKE '%.%') AS lot_period,
-  CASE
-    WHEN p.sale_date ~ '^[0-9]{2}/[0-9]{2}/[0-9]{2}' THEN
-      make_date(
-        CASE
-          WHEN substring(p.sale_date from 7 for 2)::int > 35
-            THEN 1900 + substring(p.sale_date from 7 for 2)::int
-          ELSE 2000 + substring(p.sale_date from 7 for 2)::int
-        END,
-        substring(p.sale_date from 1 for 2)::int,
-        substring(p.sale_date from 4 for 2)::int
-      )
-    ELSE NULL
-  END AS date_of_sale,
-  CASE
-    WHEN p.sale_price IS NOT NULL
-         AND regexp_replace(p.sale_price, '[^0-9.]', '', 'g') <> ''
-    THEN regexp_replace(p.sale_price, '[^0-9.]', '', 'g')::numeric
-    ELSE NULL
-  END AS price
+  safe_sale_date(p.sale_date) AS date_of_sale,
+  safe_price(p.sale_price) AS price
 FROM properties p;
