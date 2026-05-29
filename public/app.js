@@ -573,6 +573,14 @@ function buildColumns() {
 
   return [
     {
+      title: "#",
+      formatter: "rownum",
+      hozAlign: "center",
+      headerSort: false,
+      width: 56,
+      frozen: true,
+    },
+    {
       formatter: "rowSelection",
       titleFormatter: "rowSelection",
       hozAlign: "center",
