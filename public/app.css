@@ -213,3 +213,93 @@ button.toggle.active {
 }
 .toast.show { opacity: 1; }
 .toast.error { background: var(--danger); }
+
+/* ---------- Resync modal ---------- */
+.rs-help { margin: 0 0 0.9rem; font-size: 0.85rem; color: var(--muted); }
+.rs-fields {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.rs-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.rs-fields .rs-sub { font-weight: 400; color: var(--muted); }
+.rs-fields input {
+  padding: 0.45rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+.progress {
+  height: 14px;
+  background: #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 0.6rem;
+}
+.progress-bar {
+  height: 100%;
+  width: 0;
+  background: var(--primary);
+  border-radius: 8px;
+  transition: width 0.3s ease;
+}
+.progress-bar.running {
+  background-image: linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.25) 25%, transparent 25%,
+    transparent 50%, rgba(255, 255, 255, 0.25) 50%,
+    rgba(255, 255, 255, 0.25) 75%, transparent 75%, transparent
+  );
+  background-size: 24px 24px;
+  animation: rs-stripes 0.8s linear infinite;
+}
+@keyframes rs-stripes { from { background-position: 0 0; } to { background-position: 24px 0; } }
+.rs-stats { font-size: 0.85rem; color: var(--text); }
+.rs-line { margin-top: 0.25rem; }
+.rs-counts { display: flex; gap: 0.9rem; color: var(--muted); }
+.rs-counts .ok { color: #15803d; }
+.rs-counts .err { color: var(--danger); }
+.rs-meta { color: var(--muted); font-size: 0.78rem; }
+.rs-meta .err { color: var(--danger); }
+
+/* ---------- Persistent resync banner ---------- */
+#resyncBanner {
+  display: none;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  background: #0f172a;
+  color: #fff;
+  font-size: 0.85rem;
+  border-bottom: 1px solid #1e293b;
+}
+#resyncBanner.show { display: flex; }
+.rs-banner-label { font-weight: 700; white-space: nowrap; }
+.rs-banner-text { white-space: nowrap; opacity: 0.9; }
+#resyncBanner .progress {
+  flex: 1 1 auto;
+  height: 10px;
+  margin: 0;
+  background: rgba(255, 255, 255, 0.18);
+}
+#resyncBanner .progress-bar { background: #38bdf8; }
+#resyncBanner button {
+  background: transparent;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  padding: 0.3rem 0.7rem;
+}
+#resyncBanner button.danger {
+  border-color: #f87171;
+  color: #fecaca;
+}
+#resyncBanner button:hover { background: rgba(255, 255, 255, 0.12); }

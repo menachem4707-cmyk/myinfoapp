@@ -114,6 +114,7 @@ function buildChrome() {
     '<select id="cityFilter" class="search" style="max-width:170px"><option value="">All cities</option></select>' +
     '<button id="needsReview" class="toggle">Needs review</button>' +
     '<button id="refresh" title="Refresh" aria-label="Refresh">\u21bb Refresh</button>' +
+    '<button id="resyncBtn" class="primary">Resync</button>' +
     '<span class="spacer"></span>' +
     '<span class="email">' + esc(email) + "</span>" +
     '<form method="post" action="/logout" style="margin:0"><button type="submit">Sign out</button></form>';
@@ -153,6 +154,187 @@ function buildChrome() {
     '<button class="primary" id="modalSave">Save changes</button></footer>' +
     "</div>";
   document.body.appendChild(overlay);
+
+  const rs = document.createElement("div");
+  rs.className = "modal-overlay";
+  rs.id = "resyncOverlay";
+  rs.innerHTML =
+    '<div class="modal">' +
+    '<header><h2>Resync properties</h2>' +
+    '<button id="rsCloseX">Close</button></header>' +
+    '<div class="body">' +
+    '<p class="rs-help">Scrapes tax records and updates matching properties. Start small, watch the rate, then increase.</p>' +
+    '<div class="rs-fields">' +
+    '<label>Limit <span class="rs-sub">(blank or 0 = all)</span>' +
+    '<input id="rsLimit" type="number" min="0" placeholder="e.g. 200"></label>' +
+    '<label>Delay per request (ms)' +
+    '<input id="rsDelay" type="number" min="0" value="1000"></label>' +
+    '<label>Concurrency <span class="rs-sub">(1\u201310)</span>' +
+    '<input id="rsConc" type="number" min="1" max="10" value="1"></label>' +
+    "</div>" +
+    '<div class="progress"><div class="progress-bar" id="rsBar"></div></div>' +
+    '<div id="rsStats" class="rs-stats">Idle.</div>' +
+    "</div>" +
+    '<footer><button id="rsAbort" disabled>Abort</button>' +
+    '<button class="primary" id="rsStart">Start resync</button></footer>' +
+    "</div>";
+  document.body.appendChild(rs);
+
+  // Persistent banner shown whenever a resync is running (any tab / after re-login).
+  const banner = document.createElement("div");
+  banner.id = "resyncBanner";
+  banner.innerHTML =
+    '<span class="rs-banner-label">Resync running</span>' +
+    '<div class="progress banner"><div class="progress-bar running" id="rsBannerBar"></div></div>' +
+    '<span id="rsBannerText" class="rs-banner-text"></span>' +
+    '<button id="rsBannerDetails">Details</button>' +
+    '<button id="rsBannerAbort" class="danger">Abort</button>';
+  document.body.insertBefore(banner, document.body.firstChild);
+}
+
+let monitorTimer = null;
+let lastRunning = false;
+
+function fmtElapsed(ms) {
+  if (!ms || ms < 0) ms = 0;
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return (h ? h + "h " : "") + (h || m ? m + "m " : "") + sec + "s";
+}
+
+function renderResync(s) {
+  const bar = document.getElementById("rsBar");
+  const stats = document.getElementById("rsStats");
+  const startBtn = document.getElementById("rsStart");
+  const abortBtn = document.getElementById("rsAbort");
+  if (!bar || !stats) return;
+
+  const total = s.total || 0;
+  const processed = s.processed || 0;
+  const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+  bar.style.width = pct + "%";
+  bar.classList.toggle("running", !!s.running);
+
+  const startedMs = s.startedAt ? new Date(s.startedAt).getTime() : 0;
+  const endMs = s.finishedAt ? new Date(s.finishedAt).getTime() : Date.now();
+  const elapsed = startedMs ? endMs - startedMs : 0;
+  const rate = elapsed > 0 ? (processed / (elapsed / 1000)).toFixed(2) : "0";
+
+  const label = {
+    idle: "Idle",
+    running: "Running",
+    completed: "Completed",
+    aborted: "Aborted",
+    failed: "Failed",
+  }[s.status] || s.status;
+
+  stats.innerHTML =
+    '<div class="rs-line"><b>' + esc(label) + "</b>" +
+    (total ? " &middot; " + processed.toLocaleString() + " / " + total.toLocaleString() + " (" + pct + "%)" : "") +
+    "</div>" +
+    '<div class="rs-line rs-counts">' +
+    '<span class="ok">updated ' + (s.updated || 0) + "</span>" +
+    '<span>skipped ' + (s.skipped || 0) + "</span>" +
+    '<span class="err">errored ' + (s.errored || 0) + "</span>" +
+    "</div>" +
+    '<div class="rs-line rs-meta">elapsed ' + fmtElapsed(elapsed) + " &middot; " + rate + " req/s" +
+    (s.lastError ? ' &middot; <span class="err">' + esc(s.lastError) + "</span>" : "") +
+    "</div>";
+
+  if (startBtn) startBtn.disabled = !!s.running;
+  if (abortBtn) abortBtn.disabled = !s.running;
+}
+
+// The always-visible top banner (independent of the modal).
+function renderBanner(s) {
+  const banner = document.getElementById("resyncBanner");
+  if (!banner) return;
+  if (!s.running) {
+    banner.classList.remove("show");
+    return;
+  }
+  banner.classList.add("show");
+  const total = s.total || 0;
+  const processed = s.processed || 0;
+  const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+  document.getElementById("rsBannerBar").style.width = pct + "%";
+  document.getElementById("rsBannerText").textContent =
+    processed.toLocaleString() +
+    (total ? " / " + total.toLocaleString() : "") +
+    " (" + pct + "%) \u00b7 updated " + (s.updated || 0) +
+    " \u00b7 errored " + (s.errored || 0);
+}
+
+// Reflect the latest server state in both the banner and the modal.
+function applyResyncState(s) {
+  renderResync(s);
+  renderBanner(s);
+  if (lastRunning && !s.running) {
+    // A run just finished: refresh the grid so edits show up.
+    if (s.processed) table.replaceData();
+  }
+  lastRunning = !!s.running;
+}
+
+async function monitorTick() {
+  let s;
+  try {
+    s = await api("/api/resync/status");
+  } catch (e) {
+    scheduleMonitor(5000);
+    return;
+  }
+  applyResyncState(s);
+  // Poll faster while a run is active, slower when idle.
+  scheduleMonitor(s.running ? 1500 : 5000);
+}
+
+function scheduleMonitor(ms) {
+  clearTimeout(monitorTimer);
+  monitorTimer = setTimeout(monitorTick, ms);
+}
+
+function startMonitor() {
+  monitorTick();
+}
+
+function openResync() {
+  document.getElementById("resyncOverlay").classList.add("show");
+  monitorTick();
+}
+
+function closeResync() {
+  document.getElementById("resyncOverlay").classList.remove("show");
+}
+
+async function doResyncStart() {
+  const limit = parseInt(document.getElementById("rsLimit").value, 10);
+  const delayMs = parseInt(document.getElementById("rsDelay").value, 10);
+  const concurrency = parseInt(document.getElementById("rsConc").value, 10);
+  try {
+    await api("/api/resync/start", "POST", {
+      limit: Number.isNaN(limit) ? 0 : limit,
+      delayMs: Number.isNaN(delayMs) ? 1000 : delayMs,
+      concurrency: Number.isNaN(concurrency) ? 1 : concurrency,
+    });
+    toast("Resync started");
+  } catch (e) {
+    // 409 = already running; the monitor will still surface its progress.
+    toast(e.message || "Could not start resync", true);
+  }
+  monitorTick();
+}
+
+async function doResyncAbort() {
+  try {
+    await api("/api/resync/abort", "POST", {});
+    toast("Abort requested");
+  } catch (e) {
+    toast(e.message || "Could not abort", true);
+  }
+  monitorTick();
 }
 
 function setStatus(total) {
@@ -540,6 +722,17 @@ function wireEvents() {
   document.getElementById("overlay").addEventListener("click", (e) => {
     if (e.target.id === "overlay") closeModal();
   });
+
+  document.getElementById("resyncBtn").addEventListener("click", openResync);
+  document.getElementById("rsCloseX").addEventListener("click", closeResync);
+  document.getElementById("rsStart").addEventListener("click", doResyncStart);
+  document.getElementById("rsAbort").addEventListener("click", doResyncAbort);
+  document.getElementById("resyncOverlay").addEventListener("click", (e) => {
+    if (e.target.id === "resyncOverlay") closeResync();
+  });
+
+  document.getElementById("rsBannerDetails").addEventListener("click", openResync);
+  document.getElementById("rsBannerAbort").addEventListener("click", doResyncAbort);
 }
 
 // ---------- bootstrap ----------
@@ -559,6 +752,7 @@ async function main() {
   buildBulkBar();
   initTable();
   wireEvents();
+  startMonitor();
 }
 
 document.addEventListener("DOMContentLoaded", main);

@@ -425,6 +425,53 @@ app.post("/api/properties/bulk", requireAuth, async (req, res) => {
   }
 });
 
+// --- Resync control: proxy to the localhost-only property-scraper service ---
+const SCRAPER_URL = process.env.SCRAPER_URL || "http://127.0.0.1:3001";
+
+async function proxyScraper(path, method, body) {
+  const opts = { method, headers: {} };
+  if (body !== undefined) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  const r = await fetch(SCRAPER_URL + path, opts);
+  const data = await r.json().catch(() => ({}));
+  return { status: r.status, data };
+}
+
+app.post("/api/resync/start", requireAuth, async (req, res) => {
+  try {
+    const { limit, delayMs, concurrency } = req.body || {};
+    const { status, data } = await proxyScraper("/resync/start", "POST", {
+      limit,
+      delayMs,
+      concurrency,
+    });
+    res.status(status).json(data);
+  } catch (err) {
+    console.error("[api/resync/start]", err);
+    res.status(502).json({ error: "scraper service unreachable" });
+  }
+});
+
+app.get("/api/resync/status", requireAuth, async (req, res) => {
+  try {
+    const { status, data } = await proxyScraper("/resync/status", "GET");
+    res.status(status).json(data);
+  } catch (err) {
+    res.status(502).json({ error: "scraper service unreachable" });
+  }
+});
+
+app.post("/api/resync/abort", requireAuth, async (req, res) => {
+  try {
+    const { status, data } = await proxyScraper("/resync/abort", "POST", {});
+    res.status(status).json(data);
+  } catch (err) {
+    res.status(502).json({ error: "scraper service unreachable" });
+  }
+});
+
 app.get("/login", (req, res) => {
   if (req.session.userId) {
     return res.redirect("/");
