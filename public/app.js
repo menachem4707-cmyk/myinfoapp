@@ -353,7 +353,6 @@ async function saveModal() {
 // ---------- table ----------
 function buildColumns() {
   const boolFilterValues = { "": "(all)", true: "Yes", false: "No" };
-  const cityFilterValues = Object.assign({ "": "(all)" }, cityValues);
 
   const textCol = (field, title, opts) =>
     Object.assign(
@@ -396,18 +395,6 @@ function buildColumns() {
       cellClick: (e, cell) => openDetail(cell.getRow().getData().id),
     },
     textCol("name", "Address", { minWidth: 170, widthGrow: 2 }),
-    {
-      title: "City",
-      field: "city_id",
-      editor: "list",
-      editorParams: { values: cityValues, autocomplete: true, clearable: true },
-      headerFilter: "list",
-      headerFilterParams: { values: cityFilterValues, clearable: true },
-      formatter: (cell) => esc(cell.getRow().getData().city_name || ""),
-      minWidth: 110,
-    },
-    textCol("block", "Block", { width: 90 }),
-    textCol("lot", "Lot", { width: 80 }),
     textCol("owner_name", "Owner", { minWidth: 170, widthGrow: 2 }),
     textCol("owner_street", "Owner street", { minWidth: 150 }),
     textCol("city_state", "City / State", { minWidth: 140 }),
