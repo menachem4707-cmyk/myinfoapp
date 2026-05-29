@@ -488,6 +488,11 @@ function initTable() {
     selectedCount = data.length;
     updateBulkBar();
   });
+
+  table.on("dataLoadError", (error) => {
+    console.error("data load error", error);
+    toast("Could not load properties: " + (error && error.message ? error.message : error), true);
+  });
 }
 
 // ---------- wire events ----------

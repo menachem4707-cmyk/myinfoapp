@@ -244,12 +244,12 @@ function propertiesShell(email) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MyInfoApp — Properties</title>
-  <link href="https://unpkg.com/tabulator-tables@5.6.1/dist/css/tabulator.min.css" rel="stylesheet">
+  <link href="/vendor/tabulator.min.css" rel="stylesheet">
   <link href="/app.css" rel="stylesheet">
 </head>
 <body>
   <div id="signed-in" data-email="${escapeHtml(email)}"></div>
-  <script src="https://unpkg.com/tabulator-tables@5.6.1/dist/js/tabulator.min.js"></script>
+  <script src="/vendor/tabulator.min.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>`;
