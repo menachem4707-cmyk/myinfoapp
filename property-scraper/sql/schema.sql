@@ -37,6 +37,24 @@ CREATE INDEX IF NOT EXISTS idx_properties_sale_date ON properties(sale_date);
 -- Resync picks oldest-first by last run; NULLS FIRST so never-run rows lead.
 CREATE INDEX IF NOT EXISTS idx_properties_last_run ON properties(last_run_date_time ASC NULLS FIRST);
 
+-- property_history -- a snapshot of a property's prior values, written by the
+-- resync each time scraped data differs from what is stored (the same event
+-- that flips reviewed -> false). Lets users see what changed over time.
+CREATE TABLE IF NOT EXISTS property_history (
+  id                 BIGSERIAL PRIMARY KEY,
+  property_id        TEXT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  changed_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  name               VARCHAR(80),
+  owner_name         VARCHAR(255),
+  owner_street       VARCHAR(255),
+  city_state         VARCHAR(255),
+  sale_date          VARCHAR(255),
+  sale_price         VARCHAR(255),
+  last_run_date_time TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_property_history_property
+  ON property_history(property_id, changed_at DESC);
+
 -- tax_years (mirrors Tax_Year__c) -- created but not populated in v1
 CREATE TABLE IF NOT EXISTS tax_years (
   id             TEXT PRIMARY KEY,            -- Id

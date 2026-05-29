@@ -367,6 +367,24 @@ app.get("/api/properties/:id", requireAuth, async (req, res) => {
   }
 });
 
+// Change history for one property (snapshots written by the resync).
+app.get("/api/properties/:id/history", requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, changed_at, name, owner_name, owner_street, city_state,
+              sale_date, sale_price, last_run_date_time
+         FROM property_history
+        WHERE property_id = $1
+        ORDER BY changed_at DESC`,
+      [req.params.id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("[api/properties/:id/history]", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Update one property (whitelisted editable fields only).
 app.patch("/api/properties/:id", requireAuth, async (req, res) => {
   try {

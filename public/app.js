@@ -506,10 +506,56 @@ async function openDetail(id) {
         : "") +
       "</div>";
 
-    document.getElementById("modalBody").innerHTML = manual + identity + scraper + derived;
+    const history =
+      '<div class="group"><h3>Change history</h3>' +
+      '<p class="hist-note">Each row is a snapshot of the values saved just before a resync changed this property (newest first).</p>' +
+      '<div id="historyBody" class="hist-wrap">Loading\u2026</div></div>';
+
+    document.getElementById("modalBody").innerHTML =
+      manual + identity + scraper + derived + history;
     document.getElementById("overlay").classList.add("show");
+    loadHistory(id);
   } catch (e) {
     toast(e.message || "Could not load record", true);
+  }
+}
+
+function renderHistoryTable(rows) {
+  const head =
+    "<tr><th>Saved</th><th>Address</th><th>Owner</th><th>Owner street</th>" +
+    "<th>City / State</th><th>Sale date</th><th>Sale price</th><th>Last run</th></tr>";
+  const body = rows
+    .map(
+      (r) =>
+        "<tr>" +
+        "<td>" + esc(fmtDateTime(r.changed_at)) + "</td>" +
+        "<td>" + esc(r.name) + "</td>" +
+        "<td>" + esc(r.owner_name) + "</td>" +
+        "<td>" + esc(r.owner_street) + "</td>" +
+        "<td>" + esc(r.city_state) + "</td>" +
+        "<td>" + esc(r.sale_date) + "</td>" +
+        "<td>" + esc(r.sale_price) + "</td>" +
+        "<td>" + esc(fmtDateTime(r.last_run_date_time)) + "</td>" +
+        "</tr>"
+    )
+    .join("");
+  return (
+    '<table class="hist-table"><thead>' + head + "</thead><tbody>" + body + "</tbody></table>"
+  );
+}
+
+async function loadHistory(id) {
+  const el = document.getElementById("historyBody");
+  if (!el) return;
+  try {
+    const rows = await api(
+      "/api/properties/" + encodeURIComponent(id) + "/history"
+    );
+    el.innerHTML = rows.length
+      ? renderHistoryTable(rows)
+      : '<div class="hist-empty">No changes recorded yet.</div>';
+  } catch (e) {
+    el.innerHTML = '<div class="hist-empty">Could not load history.</div>';
   }
 }
 

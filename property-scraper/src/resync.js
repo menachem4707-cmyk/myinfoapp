@@ -76,12 +76,43 @@ async function applyScrape(property, details, log) {
     sets.push("reviewed = false");
   }
 
-  await pool.query(
-    `UPDATE properties SET ${sets.join(", ")} WHERE id = $1`,
-    params
-  );
+  const updateSql = `UPDATE properties SET ${sets.join(", ")} WHERE id = $1`;
 
-  log(`update ${property.id}${differs ? " (reviewed=false)" : ""}`);
+  if (differs) {
+    // Snapshot the pre-update values into property_history, then update, in
+    // one transaction so a history row never exists without its change.
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO property_history
+           (property_id, name, owner_name, owner_street, city_state,
+            sale_date, sale_price, last_run_date_time)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          property.id,
+          property.name,
+          property.owner_name,
+          property.owner_street,
+          property.city_state,
+          property.sale_date,
+          property.sale_price,
+          property.last_run_date_time,
+        ]
+      );
+      await client.query(updateSql, params);
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  } else {
+    await pool.query(updateSql, params);
+  }
+
+  log(`update ${property.id}${differs ? " (reviewed=false, history saved)" : ""}`);
   return "updated";
 }
 
