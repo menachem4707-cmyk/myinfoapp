@@ -3,25 +3,13 @@
 const fs = require("fs");
 const path = require("path");
 const { pool } = require("./db");
+const {
+  parseCsv,
+  remapRecord,
+  CITY_COLS,
+  PROPERTY_COLS,
+} = require("./csv");
 
-const CITY_COLS = ["id", "name", "district_code"];
-const PROPERTY_COLS = [
-  "id",
-  "name",
-  "city_id",
-  "block",
-  "lot",
-  "owner_name",
-  "owner_street",
-  "city_state",
-  "sale_date",
-  "sale_price",
-  "reviewed",
-  "last_run_date_time",
-  "notes",
-  "yiddish",
-  "bobov",
-];
 const BOOLEAN_COLS = new Set(["reviewed", "yiddish", "bobov"]);
 
 function coerceBoolean(value) {
@@ -33,9 +21,9 @@ function coerceBoolean(value) {
   return null;
 }
 
-// Upsert a single record into `table`, only touching the provided allowed
-// columns. Conflict on id updates those columns.
-async function upsertRow(table, allowedCols, record) {
+// Upsert a single record (already remapped to DB columns) into `table`,
+// only touching the provided allowed columns. Conflict on id updates them.
+async function upsertRow(client, table, allowedCols, record) {
   const cols = allowedCols.filter((c) =>
     Object.prototype.hasOwnProperty.call(record, c)
   );
@@ -57,7 +45,7 @@ async function upsertRow(table, allowedCols, record) {
       updateCols.map((c) => `${c} = EXCLUDED.${c}`).join(", ")
     : "DO NOTHING";
 
-  await pool.query(
+  await client.query(
     `INSERT INTO ${table} (${cols.join(", ")})
        VALUES (${placeholders.join(", ")})
      ON CONFLICT (id) ${updateClause}`,
@@ -65,82 +53,92 @@ async function upsertRow(table, allowedCols, record) {
   );
 }
 
-// Import cities then properties (order matters for the FK).
-// data: { cities?: [...], properties?: [...] }
-async function importData(data) {
-  const result = { cities: 0, properties: 0 };
+const TABLE_FOR_TYPE = { cities: "cities", properties: "properties" };
+const COLS_FOR_TYPE = { cities: CITY_COLS, properties: PROPERTY_COLS };
 
-  for (const city of data.cities || []) {
-    await upsertRow("cities", CITY_COLS, city);
-    result.cities += 1;
-  }
-  for (const property of data.properties || []) {
-    await upsertRow("properties", PROPERTY_COLS, property);
-    result.properties += 1;
-  }
+// Import an array of records of a given type (cities|properties).
+// Remaps Salesforce headers -> DB columns, upserts per row, captures errors.
+async function importRecords(client, type, records, report, logger) {
+  const table = TABLE_FOR_TYPE[type];
+  const allowedCols = COLS_FOR_TYPE[type];
+  let ok = 0;
 
-  return result;
-}
+  for (let i = 0; i < records.length; i++) {
+    const { record, unmapped } = remapRecord(records[i], type);
+    for (const u of unmapped) report.unmapped[type].add(u);
 
-// Minimal RFC-4180-ish CSV parser (handles quoted fields, commas, newlines).
-function parseCsv(text) {
-  const rows = [];
-  let row = [];
-  let field = "";
-  let inQuotes = false;
+    try {
+      await upsertRow(client, table, allowedCols, record);
+      ok += 1;
+    } catch (err) {
+      report.errors.push({
+        type,
+        id: record.id,
+        message: err.message,
+      });
+    }
 
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        if (text[i + 1] === '"') {
-          field += '"';
-          i++;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        field += ch;
-      }
-    } else if (ch === '"') {
-      inQuotes = true;
-    } else if (ch === ",") {
-      row.push(field);
-      field = "";
-    } else if (ch === "\n") {
-      row.push(field);
-      rows.push(row);
-      row = [];
-      field = "";
-    } else if (ch === "\r") {
-      // ignore; handled by \n
-    } else {
-      field += ch;
+    if (logger && (i + 1) % 1000 === 0) {
+      logger(`${type}: ${i + 1}/${records.length} processed`);
     }
   }
-  // last field/row (if file doesn't end with newline)
-  if (field !== "" || row.length > 0) {
-    row.push(field);
-    rows.push(row);
+
+  return ok;
+}
+
+// Import cities then properties (order matters for the FK).
+// data: { cities?: [...], properties?: [...] }
+// Returns { cities, properties, errors, unmapped }.
+async function importData(data, logger) {
+  const report = {
+    cities: 0,
+    properties: 0,
+    errors: [],
+    unmapped: { cities: new Set(), properties: new Set() },
+  };
+
+  const client = await pool.connect();
+  try {
+    if (data.cities && data.cities.length) {
+      report.cities = await importRecords(
+        client,
+        "cities",
+        data.cities,
+        report,
+        logger
+      );
+    }
+    if (data.properties && data.properties.length) {
+      report.properties = await importRecords(
+        client,
+        "properties",
+        data.properties,
+        report,
+        logger
+      );
+    }
+  } finally {
+    client.release();
   }
 
-  if (rows.length === 0) return [];
-  const header = rows[0].map((h) => h.trim());
-  return rows.slice(1).map((cells) => {
-    const obj = {};
-    header.forEach((key, idx) => {
-      obj[key] = cells[idx] !== undefined ? cells[idx] : null;
-    });
-    return obj;
-  });
+  return {
+    cities: report.cities,
+    properties: report.properties,
+    errors: report.errors,
+    unmapped: {
+      cities: Array.from(report.unmapped.cities),
+      properties: Array.from(report.unmapped.properties),
+    },
+  };
 }
 
 // Import from a file.
-//   .json -> { cities, properties } or a bare array (needs `type`)
+//   .json -> { cities, properties } object, or a bare array (needs `type`)
 //   .csv  -> needs `type` ('cities' | 'properties')
-async function importFromFile(filePath, type) {
+async function importFromFile(filePath, type, logger) {
   const ext = path.extname(filePath).toLowerCase();
-  const raw = fs.readFileSync(filePath, "utf8");
+  let raw = fs.readFileSync(filePath, "utf8");
+  raw = raw.replace(/^\uFEFF/, "");
 
   let data;
   if (ext === ".json") {
@@ -164,13 +162,12 @@ async function importFromFile(filePath, type) {
     throw new Error(`unsupported file type: ${ext} (use .json or .csv)`);
   }
 
-  return importData(data);
+  return importData(data, logger);
 }
 
 module.exports = {
   importData,
   importFromFile,
-  parseCsv,
   upsertRow,
   CITY_COLS,
   PROPERTY_COLS,

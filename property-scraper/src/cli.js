@@ -37,10 +37,30 @@ async function main() {
         process.exitCode = 1;
         break;
       }
-      const result = await importFromFile(file, type);
+      const result = await importFromFile(file, type, (msg) =>
+        console.log(`[import] ${msg}`)
+      );
       console.log(
         `Imported: ${result.cities} cities, ${result.properties} properties.`
       );
+      const unmapped = [
+        ...result.unmapped.cities,
+        ...result.unmapped.properties,
+      ];
+      if (unmapped.length) {
+        console.log(
+          `Ignored unmapped columns: ${[...new Set(unmapped)].join(", ")}`
+        );
+      }
+      if (result.errors.length) {
+        console.log(`Row errors: ${result.errors.length}`);
+        for (const e of result.errors.slice(0, 10)) {
+          console.log(`  - [${e.type}] id=${e.id}: ${e.message}`);
+        }
+        if (result.errors.length > 10) {
+          console.log(`  ... and ${result.errors.length - 10} more`);
+        }
+      }
       break;
     }
     case "resync": {
