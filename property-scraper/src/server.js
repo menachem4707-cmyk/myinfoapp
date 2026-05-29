@@ -3,7 +3,7 @@
 require("dotenv").config();
 const express = require("express");
 const { migrate } = require("./migrate");
-const { runResync } = require("./resync");
+const { runResync, startResync, getStatus, abortResync } = require("./resync");
 const { importData } = require("./importer");
 
 const app = express();
@@ -45,6 +45,38 @@ app.post("/resync", async (req, res) => {
     console.error("[resync]", err);
     res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+// Start a background resync. Body: { limit, delayMs, concurrency }.
+// Returns 409 if a run is already active.
+app.post("/resync/start", (req, res) => {
+  try {
+    const body = req.body || {};
+    const options = {};
+    if (body.limit !== undefined) options.limit = body.limit;
+    if (body.delayMs !== undefined) options.delayMs = body.delayMs;
+    if (body.concurrency !== undefined) options.concurrency = body.concurrency;
+
+    const status = startResync(options);
+    res.json({ ok: true, status });
+  } catch (err) {
+    if (err.code === "BUSY") {
+      return res.status(409).json({ ok: false, error: err.message, status: getStatus() });
+    }
+    console.error("[resync/start]", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Live progress of the current/last run.
+app.get("/resync/status", (req, res) => {
+  res.json(getStatus());
+});
+
+// Signal the active run to stop after the in-flight property.
+app.post("/resync/abort", (req, res) => {
+  const aborted = abortResync();
+  res.json({ ok: true, aborted, status: getStatus() });
 });
 
 // Run migrations on boot so a fresh deploy is ready, then listen.

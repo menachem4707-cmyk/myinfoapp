@@ -106,92 +106,202 @@ async function processOne(property, log) {
   }
 }
 
-// Run a full resync pass.
-// options: { limit, delayMs, concurrency, logger }
-async function runResync(options = {}) {
+// Resolve run options from explicit values, falling back to env defaults.
+function resolveOptions(options = {}) {
   const limit =
     options.limit !== undefined
-      ? options.limit
+      ? parseLimit(options.limit)
       : parseLimit(process.env.RESYNC_LIMIT);
-  const delayMs =
+  let delayMs =
     options.delayMs !== undefined
-      ? options.delayMs
+      ? parseInt(options.delayMs, 10)
       : parseInt(process.env.RESYNC_DELAY_MS || "1000", 10);
+  if (Number.isNaN(delayMs) || delayMs < 0) delayMs = 0;
   let concurrency =
     options.concurrency !== undefined
-      ? options.concurrency
+      ? parseInt(options.concurrency, 10)
       : parseInt(process.env.RESYNC_CONCURRENCY || "1", 10);
   if (Number.isNaN(concurrency) || concurrency < 1) concurrency = 1;
+  if (concurrency > 10) concurrency = 10;
+  return { limit, delayMs, concurrency };
+}
 
-  const log = options.logger || ((msg) => console.log(`[resync] ${msg}`));
+// Core runner. `controls` = { logger, shouldAbort(), onProgress(counts) }.
+async function executeRun(opts, controls = {}) {
+  const { limit, delayMs, concurrency } = opts;
+  const log = controls.logger || (() => {});
+  const shouldAbort = controls.shouldAbort || (() => false);
+  const onProgress = controls.onProgress || (() => {});
 
-  // Open a run record.
   const runRes = await pool.query(
     `INSERT INTO resync_runs (status) VALUES ('running') RETURNING id`
   );
   const runId = runRes.rows[0].id;
 
-  const counts = { total: 0, updated: 0, skipped: 0, errored: 0 };
+  const counts = { total: 0, processed: 0, updated: 0, skipped: 0, errored: 0 };
+
+  const persist = async (status) => {
+    await pool.query(
+      `UPDATE resync_runs
+          SET finished_at = now(), total = $2, updated = $3,
+              skipped = $4, errored = $5, status = $6
+        WHERE id = $1`,
+      [runId, counts.total, counts.updated, counts.skipped, counts.errored, status]
+    );
+  };
 
   try {
+    // Oldest first: never-run properties (NULL last_run) come first, then the
+    // ones whose data is most stale. p.id breaks ties for a stable order.
     const propsRes = await pool.query(
       `SELECT p.*, c.district_code
          FROM properties p
          LEFT JOIN cities c ON c.id = p.city_id
-        ORDER BY p.id
+        ORDER BY p.last_run_date_time ASC NULLS FIRST, p.id ASC
         ${limit ? "LIMIT " + limit : ""}`
     );
     const properties = propsRes.rows;
     counts.total = properties.length;
+    onProgress({ ...counts, runId });
     log(`starting run #${runId}: ${counts.total} properties, concurrency=${concurrency}, delay=${delayMs}ms`);
 
+    const handle = async (i) => {
+      const outcome = await processOne(properties[i], log);
+      counts[outcome] += 1;
+      counts.processed += 1;
+      onProgress({ ...counts, runId });
+    };
+
     if (concurrency <= 1) {
-      // Sequential with polite delay.
       for (let i = 0; i < properties.length; i++) {
-        const outcome = await processOne(properties[i], log);
-        counts[outcome] += 1;
+        if (shouldAbort()) break;
+        await handle(i);
         if (delayMs > 0 && i < properties.length - 1) await sleep(delayMs);
       }
     } else {
-      // Bounded concurrency via a shared cursor.
       let cursor = 0;
       const worker = async () => {
         while (true) {
+          if (shouldAbort()) break;
           const i = cursor++;
           if (i >= properties.length) break;
-          const outcome = await processOne(properties[i], log);
-          counts[outcome] += 1;
+          await handle(i);
           if (delayMs > 0) await sleep(delayMs);
         }
       };
-      const workers = [];
-      for (let w = 0; w < concurrency; w++) workers.push(worker());
-      await Promise.all(workers);
+      await Promise.all(
+        Array.from({ length: concurrency }, () => worker())
+      );
     }
 
-    await pool.query(
-      `UPDATE resync_runs
-          SET finished_at = now(), total = $2, updated = $3,
-              skipped = $4, errored = $5, status = 'completed'
-        WHERE id = $1`,
-      [runId, counts.total, counts.updated, counts.skipped, counts.errored]
-    );
-
+    const status = shouldAbort() ? "aborted" : "completed";
+    await persist(status);
     log(
-      `run #${runId} completed: total=${counts.total} updated=${counts.updated} skipped=${counts.skipped} errored=${counts.errored}`
+      `run #${runId} ${status}: processed=${counts.processed}/${counts.total} updated=${counts.updated} skipped=${counts.skipped} errored=${counts.errored}`
     );
-    return { runId, status: "completed", ...counts };
+    return { runId, status, ...counts };
   } catch (err) {
-    await pool.query(
-      `UPDATE resync_runs
-          SET finished_at = now(), total = $2, updated = $3,
-              skipped = $4, errored = $5, status = 'failed'
-        WHERE id = $1`,
-      [runId, counts.total, counts.updated, counts.skipped, counts.errored]
-    );
+    await persist("failed");
     log(`run #${runId} failed: ${err.message}`);
     throw err;
   }
 }
 
-module.exports = { runResync, applyScrape, processOne, COMPARE_FIELDS };
+// Blocking full run (used by the CLI and the legacy /resync endpoint).
+async function runResync(options = {}) {
+  const opts = resolveOptions(options);
+  const log = options.logger || ((msg) => console.log(`[resync] ${msg}`));
+  return executeRun(opts, { logger: log });
+}
+
+// ---- Background run management (single active run) for the HTTP API ----
+const runState = {
+  running: false,
+  runId: null,
+  status: "idle", // idle | running | completed | aborted | failed
+  total: 0,
+  processed: 0,
+  updated: 0,
+  skipped: 0,
+  errored: 0,
+  startedAt: null,
+  finishedAt: null,
+  limit: null,
+  delayMs: 1000,
+  concurrency: 1,
+  aborted: false,
+  lastError: null,
+};
+
+function getStatus() {
+  return { ...runState };
+}
+
+function abortResync() {
+  if (!runState.running) return false;
+  runState.aborted = true;
+  return true;
+}
+
+// Kick off a run in the background; returns the initial status snapshot.
+function startResync(options = {}) {
+  if (runState.running) {
+    const e = new Error("A resync is already running");
+    e.code = "BUSY";
+    throw e;
+  }
+  const opts = resolveOptions(options);
+  Object.assign(runState, {
+    running: true,
+    aborted: false,
+    status: "running",
+    runId: null,
+    total: 0,
+    processed: 0,
+    updated: 0,
+    skipped: 0,
+    errored: 0,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    limit: opts.limit,
+    delayMs: opts.delayMs,
+    concurrency: opts.concurrency,
+    lastError: null,
+  });
+
+  executeRun(opts, {
+    logger: (m) => console.log(`[resync] ${m}`),
+    shouldAbort: () => runState.aborted,
+    onProgress: (p) => {
+      runState.runId = p.runId;
+      runState.total = p.total;
+      runState.processed = p.processed || 0;
+      runState.updated = p.updated || 0;
+      runState.skipped = p.skipped || 0;
+      runState.errored = p.errored || 0;
+    },
+  })
+    .then((summary) => {
+      runState.status = summary.status;
+    })
+    .catch((err) => {
+      runState.status = "failed";
+      runState.lastError = err.message;
+    })
+    .finally(() => {
+      runState.running = false;
+      runState.finishedAt = new Date().toISOString();
+    });
+
+  return getStatus();
+}
+
+module.exports = {
+  runResync,
+  startResync,
+  getStatus,
+  abortResync,
+  applyScrape,
+  processOne,
+  COMPARE_FIELDS,
+};

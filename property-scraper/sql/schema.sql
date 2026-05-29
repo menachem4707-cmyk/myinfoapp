@@ -34,6 +34,8 @@ CREATE INDEX IF NOT EXISTS idx_properties_name ON properties(name);
 CREATE INDEX IF NOT EXISTS idx_properties_owner_name ON properties(owner_name);
 CREATE INDEX IF NOT EXISTS idx_properties_reviewed ON properties(reviewed);
 CREATE INDEX IF NOT EXISTS idx_properties_sale_date ON properties(sale_date);
+-- Resync picks oldest-first by last run; NULLS FIRST so never-run rows lead.
+CREATE INDEX IF NOT EXISTS idx_properties_last_run ON properties(last_run_date_time ASC NULLS FIRST);
 
 -- tax_years (mirrors Tax_Year__c) -- created but not populated in v1
 CREATE TABLE IF NOT EXISTS tax_years (

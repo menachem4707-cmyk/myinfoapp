@@ -2,8 +2,9 @@
 # Install with:  crontab -e   (paste a line below) — or copy to /etc/cron.d/property-scraper
 # /etc/cron.d/ entries need a user field (root); `crontab -e` entries do NOT.
 
-# Option A: trigger the running service over localhost (preferred; reuses warm process)
-0 3 * * * root curl -s -X POST http://127.0.0.1:3001/resync >> /var/log/property-scraper-resync.log 2>&1
+# Option A: trigger the running service over localhost (preferred; reuses warm process).
+# /resync/start kicks off a background run and returns immediately (no long-held connection).
+0 3 * * * root curl -s -X POST http://127.0.0.1:3001/resync/start -H 'Content-Type: application/json' -d '{}' >> /var/log/property-scraper-resync.log 2>&1
 
 # Option B: run the CLI directly (use if you do not run the HTTP service)
 # 0 3 * * * root cd /var/www/property-scraper && /usr/bin/node src/cli.js resync >> /var/log/property-scraper-resync.log 2>&1
