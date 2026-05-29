@@ -111,6 +111,7 @@ function buildChrome() {
   top.innerHTML =
     '<h1>Properties</h1>' +
     '<input id="search" class="search" type="search" placeholder="Search address, owner, block/lot...">' +
+    '<select id="cityFilter" class="search" style="max-width:170px"><option value="">All cities</option></select>' +
     '<button id="needsReview" class="toggle">Needs review</button>' +
     '<span class="spacer"></span>' +
     '<span class="email">' + esc(email) + "</span>" +
@@ -156,6 +157,16 @@ function buildChrome() {
 function setStatus(total) {
   const el = document.getElementById("status");
   if (el) el.textContent = (total == null ? "" : total.toLocaleString() + " properties");
+}
+
+function populateCityFilter() {
+  const sel = document.getElementById("cityFilter");
+  if (!sel) return;
+  sel.innerHTML =
+    '<option value="">All cities</option>' +
+    cities
+      .map((c) => `<option value="${esc(c.id)}">${esc(c.name || c.id)}</option>`)
+      .join("");
 }
 
 // ---------- bulk bar ----------
@@ -394,6 +405,9 @@ function buildColumns() {
       headerSort: false,
       cellClick: (e, cell) => openDetail(cell.getRow().getData().id),
     },
+    boolCol("reviewed", "Reviewed"),
+    boolCol("yiddish", "Yiddish"),
+    boolCol("bobov", "Bobov"),
     textCol("name", "Address", { minWidth: 170, widthGrow: 2 }),
     textCol("owner_name", "Owner", { minWidth: 170, widthGrow: 2 }),
     textCol("owner_street", "Owner street", { minWidth: 150 }),
@@ -413,9 +427,6 @@ function buildColumns() {
       width: 110,
       headerSort: true,
     },
-    boolCol("reviewed", "Reviewed"),
-    boolCol("yiddish", "Yiddish"),
-    boolCol("bobov", "Bobov"),
     textCol("notes", "Notes", { minWidth: 140 }),
     {
       title: "Last run",
@@ -511,6 +522,12 @@ function wireEvents() {
     table.setHeaderFilterValue("reviewed", active ? "false" : "");
   });
 
+  document.getElementById("cityFilter").addEventListener("change", (e) => {
+    const v = e.target.value;
+    if (v) table.setFilter("city_id", "=", v);
+    else table.clearFilter();
+  });
+
   document.getElementById("modalClose").addEventListener("click", closeModal);
   document.getElementById("modalCancel").addEventListener("click", closeModal);
   document.getElementById("modalSave").addEventListener("click", saveModal);
@@ -531,6 +548,7 @@ async function main() {
   cities.forEach((c) => {
     cityValues[c.id] = c.name || c.id;
   });
+  populateCityFilter();
 
   buildBulkBar();
   initTable();
