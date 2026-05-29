@@ -1,0 +1,15 @@
+[Unit]
+Description=NJ Property Tax Scraper service
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=/var/www/property-scraper
+ExecStart=/usr/bin/node src/server.js
+EnvironmentFile=/var/www/property-scraper/.env
+Restart=on-failure
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

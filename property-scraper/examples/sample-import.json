@@ -1,0 +1,17 @@
+{
+  "cities": [
+    { "id": "a01fI000008sFVJQA2", "name": "Lakewood", "district_code": "2009" }
+  ],
+  "properties": [
+    {
+      "id": "a02fI000003abcdEFG",
+      "name": "123 MAIN ST",
+      "city_id": "a01fI000008sFVJQA2",
+      "block": "388",
+      "lot": "12",
+      "notes": "imported sample",
+      "yiddish": false,
+      "bobov": false
+    }
+  ]
+}
