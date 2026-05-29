@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS properties (
 );
 
 CREATE INDEX IF NOT EXISTS idx_properties_city_id ON properties(city_id);
+-- Supporting indexes for the data table (sort/filter columns).
+CREATE INDEX IF NOT EXISTS idx_properties_name ON properties(name);
+CREATE INDEX IF NOT EXISTS idx_properties_owner_name ON properties(owner_name);
+CREATE INDEX IF NOT EXISTS idx_properties_reviewed ON properties(reviewed);
+CREATE INDEX IF NOT EXISTS idx_properties_sale_date ON properties(sale_date);
 
 -- tax_years (mirrors Tax_Year__c) -- created but not populated in v1
 CREATE TABLE IF NOT EXISTS tax_years (
