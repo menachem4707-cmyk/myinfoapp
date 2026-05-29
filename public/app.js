@@ -174,6 +174,7 @@ function buildChrome() {
     "</div>" +
     '<div class="progress"><div class="progress-bar" id="rsBar"></div></div>' +
     '<div id="rsStats" class="rs-stats">Idle.</div>' +
+    '<div id="rsErrors" class="rs-errors"></div>' +
     "</div>" +
     '<footer><button id="rsAbort" disabled>Abort</button>' +
     '<button class="primary" id="rsStart">Start resync</button></footer>' +
@@ -235,16 +236,48 @@ function renderResync(s) {
     (total ? " &middot; " + processed.toLocaleString() + " / " + total.toLocaleString() + " (" + pct + "%)" : "") +
     "</div>" +
     '<div class="rs-line rs-counts">' +
-    '<span class="ok">updated ' + (s.updated || 0) + "</span>" +
-    '<span>skipped ' + (s.skipped || 0) + "</span>" +
-    '<span class="err">errored ' + (s.errored || 0) + "</span>" +
+    '<span class="ok">changed ' + (s.changed || 0) + "</span>" +
+    '<span>same ' + (s.same || 0) + "</span>" +
+    '<span class="err">error ' + (s.errored || 0) + "</span>" +
     "</div>" +
     '<div class="rs-line rs-meta">elapsed ' + fmtElapsed(elapsed) + " &middot; " + rate + " req/s" +
     (s.lastError ? ' &middot; <span class="err">' + esc(s.lastError) + "</span>" : "") +
     "</div>";
 
+  renderResyncErrors(s);
+
   if (startBtn) startBtn.disabled = !!s.running;
   if (abortBtn) abortBtn.disabled = !s.running;
+}
+
+function renderResyncErrors(s) {
+  const box = document.getElementById("rsErrors");
+  if (!box) return;
+  const errs = s.errors || [];
+  if (!errs.length) {
+    box.innerHTML = "";
+    return;
+  }
+  const shown = (s.errored || 0) - errs.length;
+  box.innerHTML =
+    '<div class="rs-errors-head">Errors (' + (s.errored || 0) + ")</div>" +
+    '<div class="rs-errors-list">' +
+    errs
+      .map(
+        (e) =>
+          '<div class="rs-error-row">' +
+          '<span class="rs-error-name">' + esc(e.name || e.id) + "</span>" +
+          '<span class="rs-error-reason">' + esc(e.reason || ("HTTP " + e.status)) + "</span>" +
+          (e.url
+            ? '<a class="rs-error-link" href="' + esc(e.url) + '" target="_blank" rel="noopener">open</a>'
+            : "") +
+          "</div>"
+      )
+      .join("") +
+    (shown > 0
+      ? '<div class="rs-error-more">\u2026and ' + shown.toLocaleString() + " more</div>"
+      : "") +
+    "</div>";
 }
 
 // The always-visible top banner (independent of the modal).
@@ -263,8 +296,9 @@ function renderBanner(s) {
   document.getElementById("rsBannerText").textContent =
     processed.toLocaleString() +
     (total ? " / " + total.toLocaleString() : "") +
-    " (" + pct + "%) \u00b7 updated " + (s.updated || 0) +
-    " \u00b7 errored " + (s.errored || 0);
+    " (" + pct + "%) \u00b7 changed " + (s.changed || 0) +
+    " \u00b7 same " + (s.same || 0) +
+    " \u00b7 error " + (s.errored || 0);
 }
 
 // Reflect the latest server state in both the banner and the modal.

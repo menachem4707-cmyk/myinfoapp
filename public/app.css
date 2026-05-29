@@ -269,6 +269,32 @@ button.toggle.active {
 .rs-counts .err { color: var(--danger); }
 .rs-meta { color: var(--muted); font-size: 0.78rem; }
 .rs-meta .err { color: var(--danger); }
+.rs-errors { margin-top: 0.8rem; }
+.rs-errors-head {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--danger);
+  margin-bottom: 0.35rem;
+}
+.rs-errors-list {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.rs-error-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.35rem 0.55rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+}
+.rs-error-row:last-child { border-bottom: none; }
+.rs-error-name { font-weight: 600; flex: 0 0 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-error-reason { color: var(--danger); flex: 1 1 auto; }
+.rs-error-link { flex: 0 0 auto; font-size: 0.78rem; }
+.rs-error-more { padding: 0.4rem 0.55rem; font-size: 0.78rem; color: var(--muted); }
 
 /* ---------- Persistent resync banner ---------- */
 #resyncBanner {

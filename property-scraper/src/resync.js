@@ -35,12 +35,13 @@ function parseLimit(raw) {
 }
 
 // Apply the scraped details to one property row.
-// Returns 'updated' | 'skipped'. Mutates counters via the returned outcome.
+// Returns { outcome: 'changed' | 'same' | 'errored', reason? }.
 async function applyScrape(property, details, log) {
-  // Accept ONLY IF owner_name and name (address) are both non-blank.
+  // A good response must carry an owner and an address; otherwise it is not a
+  // usable record and counts as an error (not a silent skip).
   if (isBlank(details.owner_name) || isBlank(details.name)) {
-    log(`skip ${property.id}: blank owner or address`);
-    return "skipped";
+    log(`error ${property.id}: blank owner or address`);
+    return { outcome: "errored", reason: "empty response (no owner/address)" };
   }
 
   // reviewed -> false if ANY compared field differs from stored value.
@@ -112,28 +113,38 @@ async function applyScrape(property, details, log) {
     await pool.query(updateSql, params);
   }
 
-  log(`update ${property.id}${differs ? " (reviewed=false, history saved)" : ""}`);
-  return "updated";
+  log(`update ${property.id}${differs ? " (reviewed=false, history saved)" : " (same)"}`);
+  return { outcome: differs ? "changed" : "same" };
 }
 
-// Process a single property end-to-end. Returns 'updated' | 'skipped' | 'errored'.
+// Process a single property end-to-end.
+// Returns { outcome: 'changed' | 'same' | 'errored', url, status, reason? }.
 async function processOne(property, log) {
+  let url = null;
+  let status = null;
   try {
     const city = property.city_id
       ? { district_code: property.district_code }
       : null;
-    const { ok, status, url, details } = await scrapeProperty(property, city);
+    const r = await scrapeProperty(property, city);
+    url = r.url;
+    status = r.status;
     log(`fetch ${property.id} -> ${status} ${url}`);
 
-    if (!ok || !details) {
-      log(`skip ${property.id}: status ${status} / empty body`);
-      return "skipped";
+    // No usable response: HTTP error status or empty body.
+    if (!r.ok || !r.details) {
+      const reason =
+        status === 200 ? "empty response body" : "HTTP " + status;
+      log(`error ${property.id}: ${reason}`);
+      return { outcome: "errored", url, status, reason };
     }
 
-    return await applyScrape(property, details, log);
+    const res = await applyScrape(property, r.details, log);
+    return { outcome: res.outcome, url, status, reason: res.reason };
   } catch (err) {
+    // No response at all: connection refused, DNS, TLS, timeout, etc.
     log(`error ${property.id}: ${err.message}`);
-    return "errored";
+    return { outcome: "errored", url, status, reason: err.message || "request failed" };
   }
 }
 
@@ -157,27 +168,28 @@ function resolveOptions(options = {}) {
   return { limit, delayMs, concurrency };
 }
 
-// Core runner. `controls` = { logger, shouldAbort(), onProgress(counts) }.
+// Core runner. `controls` = { logger, shouldAbort(), onProgress(counts), onError(err) }.
 async function executeRun(opts, controls = {}) {
   const { limit, delayMs, concurrency } = opts;
   const log = controls.logger || (() => {});
   const shouldAbort = controls.shouldAbort || (() => false);
   const onProgress = controls.onProgress || (() => {});
+  const onError = controls.onError || (() => {});
 
   const runRes = await pool.query(
     `INSERT INTO resync_runs (status) VALUES ('running') RETURNING id`
   );
   const runId = runRes.rows[0].id;
 
-  const counts = { total: 0, processed: 0, updated: 0, skipped: 0, errored: 0 };
+  const counts = { total: 0, processed: 0, changed: 0, same: 0, errored: 0 };
 
   const persist = async (status) => {
     await pool.query(
       `UPDATE resync_runs
-          SET finished_at = now(), total = $2, updated = $3,
-              skipped = $4, errored = $5, status = $6
+          SET finished_at = now(), total = $2, changed = $3,
+              same = $4, errored = $5, status = $6
         WHERE id = $1`,
-      [runId, counts.total, counts.updated, counts.skipped, counts.errored, status]
+      [runId, counts.total, counts.changed, counts.same, counts.errored, status]
     );
   };
 
@@ -197,9 +209,20 @@ async function executeRun(opts, controls = {}) {
     log(`starting run #${runId}: ${counts.total} properties, concurrency=${concurrency}, delay=${delayMs}ms`);
 
     const handle = async (i) => {
-      const outcome = await processOne(properties[i], log);
-      counts[outcome] += 1;
+      const p = properties[i];
+      const r = await processOne(p, log);
+      counts[r.outcome] += 1;
       counts.processed += 1;
+      if (r.outcome === "errored") {
+        onError({
+          id: p.id,
+          name: p.name,
+          url: r.url,
+          status: r.status,
+          reason: r.reason,
+          at: new Date().toISOString(),
+        });
+      }
       onProgress({ ...counts, runId });
     };
 
@@ -228,7 +251,7 @@ async function executeRun(opts, controls = {}) {
     const status = shouldAbort() ? "aborted" : "completed";
     await persist(status);
     log(
-      `run #${runId} ${status}: processed=${counts.processed}/${counts.total} updated=${counts.updated} skipped=${counts.skipped} errored=${counts.errored}`
+      `run #${runId} ${status}: processed=${counts.processed}/${counts.total} changed=${counts.changed} same=${counts.same} errored=${counts.errored}`
     );
     return { runId, status, ...counts };
   } catch (err) {
@@ -246,14 +269,17 @@ async function runResync(options = {}) {
 }
 
 // ---- Background run management (single active run) for the HTTP API ----
+// Cap the error list kept in memory so a huge run can't balloon the process.
+const MAX_ERRORS = 500;
+
 const runState = {
   running: false,
   runId: null,
   status: "idle", // idle | running | completed | aborted | failed
   total: 0,
   processed: 0,
-  updated: 0,
-  skipped: 0,
+  changed: 0,
+  same: 0,
   errored: 0,
   startedAt: null,
   finishedAt: null,
@@ -262,10 +288,11 @@ const runState = {
   concurrency: 1,
   aborted: false,
   lastError: null,
+  errors: [],
 };
 
 function getStatus() {
-  return { ...runState };
+  return { ...runState, errors: runState.errors.slice(0, 200) };
 }
 
 function abortResync() {
@@ -289,8 +316,8 @@ function startResync(options = {}) {
     runId: null,
     total: 0,
     processed: 0,
-    updated: 0,
-    skipped: 0,
+    changed: 0,
+    same: 0,
     errored: 0,
     startedAt: new Date().toISOString(),
     finishedAt: null,
@@ -298,6 +325,7 @@ function startResync(options = {}) {
     delayMs: opts.delayMs,
     concurrency: opts.concurrency,
     lastError: null,
+    errors: [],
   });
 
   executeRun(opts, {
@@ -307,9 +335,12 @@ function startResync(options = {}) {
       runState.runId = p.runId;
       runState.total = p.total;
       runState.processed = p.processed || 0;
-      runState.updated = p.updated || 0;
-      runState.skipped = p.skipped || 0;
+      runState.changed = p.changed || 0;
+      runState.same = p.same || 0;
       runState.errored = p.errored || 0;
+    },
+    onError: (e) => {
+      if (runState.errors.length < MAX_ERRORS) runState.errors.push(e);
     },
   })
     .then((summary) => {

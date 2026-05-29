@@ -69,17 +69,21 @@ CREATE TABLE IF NOT EXISTS tax_years (
   property_class VARCHAR(255)                 -- Property_Class__c
 );
 
--- resync_runs -- one row per resync batch for run summaries
+-- resync_runs -- one row per resync batch for run summaries.
+-- Outcomes: changed (key data updated, reviewed->false), same (good response,
+-- only last_run bumped), errored (no/empty/HTTP-error response).
 CREATE TABLE IF NOT EXISTS resync_runs (
   id          SERIAL PRIMARY KEY,
   started_at  TIMESTAMP NOT NULL DEFAULT now(),
   finished_at TIMESTAMP,
   total       INTEGER DEFAULT 0,
-  updated     INTEGER DEFAULT 0,
-  skipped     INTEGER DEFAULT 0,
+  updated     INTEGER DEFAULT 0,             -- legacy (pre-changed/same split)
+  skipped     INTEGER DEFAULT 0,             -- legacy
   errored     INTEGER DEFAULT 0,
-  status      TEXT DEFAULT 'running'           -- running | completed | failed
+  status      TEXT DEFAULT 'running'           -- running | completed | aborted | failed
 );
+ALTER TABLE resync_runs ADD COLUMN IF NOT EXISTS changed INTEGER DEFAULT 0;
+ALTER TABLE resync_runs ADD COLUMN IF NOT EXISTS same    INTEGER DEFAULT 0;
 
 -- Error-safe parser for Sale_Date__c "MM/DD/YY" -> DATE. Returns NULL for any
 -- blank / malformed / out-of-range value (e.g. 00/00/00, 02/30/21) instead of
