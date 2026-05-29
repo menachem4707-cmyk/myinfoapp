@@ -195,7 +195,7 @@ function updateBulkBar() {
   const bar = document.getElementById("bulkbar");
   document.getElementById("bulkCount").textContent = selectedCount + " selected";
   document.getElementById("bulkApplySel").disabled = selectedCount === 0;
-  bar.classList.toggle("show", true);
+  bar.classList.toggle("show", selectedCount > 0);
 }
 
 async function applyBulk(all) {
@@ -444,7 +444,7 @@ function buildColumns() {
 
 function initTable() {
   table = new Tabulator("#table", {
-    height: "calc(100vh - 150px)",
+    height: "100%",
     layout: "fitColumns",
     placeholder: "No properties match.",
     index: "id",

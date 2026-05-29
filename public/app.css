@@ -13,11 +13,17 @@
 
 * { box-sizing: border-box; }
 
+html, body { height: 100%; }
+
 body {
   margin: 0;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   background: var(--bg);
   color: var(--text);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .topbar {
@@ -92,7 +98,11 @@ button.toggle.active {
 }
 .bulkbar .count { font-weight: 600; }
 
-#table { margin: 0.75rem; }
+#table {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0.6rem 0.75rem 0;
+}
 
 .tabulator { background: var(--panel); border: 1px solid var(--border); }
 .row-needs-review { background: var(--warn-bg) !important; }
@@ -108,9 +118,13 @@ button.toggle.active {
 }
 
 .statusbar {
-  padding: 0.35rem 1rem;
-  font-size: 0.82rem;
-  color: var(--muted);
+  flex: 0 0 auto;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--panel);
+  border-top: 1px solid var(--border);
 }
 
 /* Modal */
