@@ -113,6 +113,7 @@ function buildChrome() {
     '<input id="search" class="search" type="search" placeholder="Search address, owner, block/lot...">' +
     '<select id="cityFilter" class="search" style="max-width:170px"><option value="">All cities</option></select>' +
     '<button id="needsReview" class="toggle">Needs review</button>' +
+    '<button id="refresh" title="Refresh" aria-label="Refresh">\u21bb Refresh</button>' +
     '<span class="spacer"></span>' +
     '<span class="email">' + esc(email) + "</span>" +
     '<form method="post" action="/logout" style="margin:0"><button type="submit">Sign out</button></form>';
@@ -526,6 +527,11 @@ function wireEvents() {
     const v = e.target.value;
     if (v) table.setFilter("city_id", "=", v);
     else table.clearFilter();
+  });
+
+  document.getElementById("refresh").addEventListener("click", () => {
+    table.replaceData();
+    toast("Refreshed");
   });
 
   document.getElementById("modalClose").addEventListener("click", closeModal);
