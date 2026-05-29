@@ -295,6 +295,33 @@ button.toggle.active {
 .rs-error-reason { color: var(--danger); flex: 1 1 auto; }
 .rs-error-link { flex: 0 0 auto; font-size: 0.78rem; }
 .rs-error-more { padding: 0.4rem 0.55rem; font-size: 0.78rem; color: var(--muted); }
+.rs-note {
+  margin-top: 0.4rem;
+  padding: 0.4rem 0.55rem;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  color: #9a3412;
+}
+
+/* ---------- Recent runs ---------- */
+.rs-runs { margin-top: 1rem; }
+.rs-runs-head { font-size: 0.8rem; font-weight: 700; margin-bottom: 0.35rem; }
+.rs-runs-wrap { max-height: 220px; overflow-y: auto; }
+.runs-table td:title { cursor: help; }
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+.badge-completed { background: #dcfce7; color: #166534; }
+.badge-running { background: #dbeafe; color: #1e40af; }
+.badge-aborted { background: #fef3c7; color: #92400e; }
+.badge-failed { background: #fee2e2; color: #991b1b; }
 
 /* ---------- Persistent resync banner ---------- */
 #resyncBanner {

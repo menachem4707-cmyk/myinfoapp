@@ -133,44 +133,90 @@ async function processOne(property, log) {
 
     // No usable response: HTTP error status or empty body.
     if (!r.ok || !r.details) {
-      const reason =
-        status === 200 ? "empty response body" : "HTTP " + status;
+      const empty = status === 200;
+      const reason = empty ? "empty response body" : "HTTP " + status;
       log(`error ${property.id}: ${reason}`);
-      return { outcome: "errored", url, status, reason };
+      return { outcome: "errored", url, status, reason, empty };
     }
 
     const res = await applyScrape(property, r.details, log);
-    return { outcome: res.outcome, url, status, reason: res.reason };
+    // A 200 that parsed but has no owner/address is also an "empty" signal.
+    return {
+      outcome: res.outcome,
+      url,
+      status,
+      reason: res.reason,
+      empty: res.outcome === "errored",
+    };
   } catch (err) {
     // No response at all: connection refused, DNS, TLS, timeout, etc.
     log(`error ${property.id}: ${err.message}`);
-    return { outcome: "errored", url, status, reason: err.message || "request failed" };
+    return {
+      outcome: "errored",
+      url,
+      status,
+      reason: err.message || "request failed",
+      empty: false,
+    };
   }
 }
 
+function toInt(v, fallback) {
+  const n = parseInt(v, 10);
+  return Number.isNaN(n) ? fallback : n;
+}
+
 // Resolve run options from explicit values, falling back to env defaults.
+// Delay is a range [delayMin, delayMax]; each request waits a random amount in
+// that range to look less like a fixed-rate bot.
 function resolveOptions(options = {}) {
   const limit =
     options.limit !== undefined
       ? parseLimit(options.limit)
       : parseLimit(process.env.RESYNC_LIMIT);
-  let delayMs =
-    options.delayMs !== undefined
-      ? parseInt(options.delayMs, 10)
-      : parseInt(process.env.RESYNC_DELAY_MS || "1000", 10);
-  if (Number.isNaN(delayMs) || delayMs < 0) delayMs = 0;
+
+  // Accept delayMin/delayMax, or a single delayMs (used for both), or env.
+  let delayMin =
+    options.delayMin !== undefined
+      ? toInt(options.delayMin, 1000)
+      : options.delayMs !== undefined
+      ? toInt(options.delayMs, 1000)
+      : toInt(process.env.RESYNC_DELAY_MIN_MS || process.env.RESYNC_DELAY_MS, 1000);
+  let delayMax =
+    options.delayMax !== undefined
+      ? toInt(options.delayMax, delayMin)
+      : options.delayMs !== undefined
+      ? toInt(options.delayMs, delayMin)
+      : toInt(process.env.RESYNC_DELAY_MAX_MS || process.env.RESYNC_DELAY_MS, 5000);
+  if (delayMin < 0) delayMin = 0;
+  if (delayMax < delayMin) delayMax = delayMin;
+
   let concurrency =
     options.concurrency !== undefined
-      ? parseInt(options.concurrency, 10)
-      : parseInt(process.env.RESYNC_CONCURRENCY || "1", 10);
-  if (Number.isNaN(concurrency) || concurrency < 1) concurrency = 1;
+      ? toInt(options.concurrency, 1)
+      : toInt(process.env.RESYNC_CONCURRENCY, 1);
+  if (concurrency < 1) concurrency = 1;
   if (concurrency > 10) concurrency = 10;
-  return { limit, delayMs, concurrency };
+
+  // Auto-abort after this many consecutive empty responses (0 = disabled).
+  let autoAbortAfter =
+    options.autoAbortAfter !== undefined
+      ? toInt(options.autoAbortAfter, 10)
+      : toInt(process.env.RESYNC_AUTO_ABORT_EMPTIES, 10);
+  if (autoAbortAfter < 0) autoAbortAfter = 0;
+
+  return { limit, delayMin, delayMax, concurrency, autoAbortAfter };
+}
+
+// Random integer delay in [min, max].
+function pickDelay(min, max) {
+  if (max <= min) return min;
+  return min + Math.floor(Math.random() * (max - min + 1));
 }
 
 // Core runner. `controls` = { logger, shouldAbort(), onProgress(counts), onError(err) }.
 async function executeRun(opts, controls = {}) {
-  const { limit, delayMs, concurrency } = opts;
+  const { limit, delayMin, delayMax, concurrency, autoAbortAfter } = opts;
   const log = controls.logger || (() => {});
   const shouldAbort = controls.shouldAbort || (() => false);
   const onProgress = controls.onProgress || (() => {});
@@ -183,15 +229,21 @@ async function executeRun(opts, controls = {}) {
 
   const counts = { total: 0, processed: 0, changed: 0, same: 0, errored: 0 };
 
-  const persist = async (status) => {
+  const persist = async (status, note) => {
     await pool.query(
       `UPDATE resync_runs
           SET finished_at = now(), total = $2, changed = $3,
-              same = $4, errored = $5, status = $6
+              same = $4, errored = $5, status = $6, note = $7
         WHERE id = $1`,
-      [runId, counts.total, counts.changed, counts.same, counts.errored, status]
+      [runId, counts.total, counts.changed, counts.same, counts.errored, status, note || null]
     );
   };
+
+  // Auto-abort guard: too many empty responses in a row almost certainly means
+  // the source is rate-limiting/blocking us, not that the parcels are empty.
+  let consecutiveEmpty = 0;
+  let autoAbort = false;
+  let autoAbortNote = null;
 
   try {
     // Oldest first: never-run properties (NULL last_run) come first, then the
@@ -206,7 +258,7 @@ async function executeRun(opts, controls = {}) {
     const properties = propsRes.rows;
     counts.total = properties.length;
     onProgress({ ...counts, runId });
-    log(`starting run #${runId}: ${counts.total} properties, concurrency=${concurrency}, delay=${delayMs}ms`);
+    log(`starting run #${runId}: ${counts.total} properties, concurrency=${concurrency}, delay=${delayMin}-${delayMax}ms, autoAbortAfter=${autoAbortAfter}`);
 
     const handle = async (i) => {
       const p = properties[i];
@@ -223,24 +275,37 @@ async function executeRun(opts, controls = {}) {
           at: new Date().toISOString(),
         });
       }
+      // Track consecutive empty responses for the auto-abort guard.
+      if (r.empty) {
+        consecutiveEmpty += 1;
+        if (autoAbortAfter > 0 && consecutiveEmpty >= autoAbortAfter && !autoAbort) {
+          autoAbort = true;
+          autoAbortNote = `Auto-aborted after ${consecutiveEmpty} consecutive empty responses (source likely rate-limiting).`;
+          log(`run #${runId}: ${autoAbortNote}`);
+        }
+      } else {
+        consecutiveEmpty = 0;
+      }
       onProgress({ ...counts, runId });
     };
 
+    const stop = () => shouldAbort() || autoAbort;
+
     if (concurrency <= 1) {
       for (let i = 0; i < properties.length; i++) {
-        if (shouldAbort()) break;
+        if (stop()) break;
         await handle(i);
-        if (delayMs > 0 && i < properties.length - 1) await sleep(delayMs);
+        if (!stop() && i < properties.length - 1) await sleep(pickDelay(delayMin, delayMax));
       }
     } else {
       let cursor = 0;
       const worker = async () => {
         while (true) {
-          if (shouldAbort()) break;
+          if (stop()) break;
           const i = cursor++;
           if (i >= properties.length) break;
           await handle(i);
-          if (delayMs > 0) await sleep(delayMs);
+          if (!stop()) await sleep(pickDelay(delayMin, delayMax));
         }
       };
       await Promise.all(
@@ -248,14 +313,15 @@ async function executeRun(opts, controls = {}) {
       );
     }
 
-    const status = shouldAbort() ? "aborted" : "completed";
-    await persist(status);
+    const status = stop() ? "aborted" : "completed";
+    const note = autoAbort ? autoAbortNote : null;
+    await persist(status, note);
     log(
       `run #${runId} ${status}: processed=${counts.processed}/${counts.total} changed=${counts.changed} same=${counts.same} errored=${counts.errored}`
     );
-    return { runId, status, ...counts };
+    return { runId, status, note, autoAborted: autoAbort, ...counts };
   } catch (err) {
-    await persist("failed");
+    await persist("failed", err.message);
     log(`run #${runId} failed: ${err.message}`);
     throw err;
   }
@@ -284,9 +350,12 @@ const runState = {
   startedAt: null,
   finishedAt: null,
   limit: null,
-  delayMs: 1000,
+  delayMin: 1000,
+  delayMax: 5000,
   concurrency: 1,
+  autoAbortAfter: 10,
   aborted: false,
+  note: null,
   lastError: null,
   errors: [],
 };
@@ -322,8 +391,11 @@ function startResync(options = {}) {
     startedAt: new Date().toISOString(),
     finishedAt: null,
     limit: opts.limit,
-    delayMs: opts.delayMs,
+    delayMin: opts.delayMin,
+    delayMax: opts.delayMax,
     concurrency: opts.concurrency,
+    autoAbortAfter: opts.autoAbortAfter,
+    note: null,
     lastError: null,
     errors: [],
   });
@@ -345,6 +417,7 @@ function startResync(options = {}) {
   })
     .then((summary) => {
       runState.status = summary.status;
+      runState.note = summary.note || null;
     })
     .catch((err) => {
       runState.status = "failed";

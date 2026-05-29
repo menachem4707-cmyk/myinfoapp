@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS resync_runs (
 );
 ALTER TABLE resync_runs ADD COLUMN IF NOT EXISTS changed INTEGER DEFAULT 0;
 ALTER TABLE resync_runs ADD COLUMN IF NOT EXISTS same    INTEGER DEFAULT 0;
+ALTER TABLE resync_runs ADD COLUMN IF NOT EXISTS note    TEXT;
 
 -- Error-safe parser for Sale_Date__c "MM/DD/YY" -> DATE. Returns NULL for any
 -- blank / malformed / out-of-range value (e.g. 00/00/00, 02/30/21) instead of

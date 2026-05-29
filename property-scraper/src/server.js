@@ -55,7 +55,10 @@ app.post("/resync/start", (req, res) => {
     const options = {};
     if (body.limit !== undefined) options.limit = body.limit;
     if (body.delayMs !== undefined) options.delayMs = body.delayMs;
+    if (body.delayMin !== undefined) options.delayMin = body.delayMin;
+    if (body.delayMax !== undefined) options.delayMax = body.delayMax;
     if (body.concurrency !== undefined) options.concurrency = body.concurrency;
+    if (body.autoAbortAfter !== undefined) options.autoAbortAfter = body.autoAbortAfter;
 
     const status = startResync(options);
     res.json({ ok: true, status });
@@ -86,6 +89,21 @@ async function start() {
     console.log("[server] migrations applied");
   } catch (err) {
     console.error("[server] migration failed:", err.message);
+  }
+
+  // Any run still marked 'running' at boot is orphaned (the process died
+  // mid-run). Close it out so the history doesn't show a stuck run.
+  try {
+    const { pool } = require("./db");
+    const r = await pool.query(
+      `UPDATE resync_runs
+          SET status = 'failed', finished_at = now(),
+              note = COALESCE(note, 'interrupted by service restart')
+        WHERE status = 'running'`
+    );
+    if (r.rowCount) console.log(`[server] closed ${r.rowCount} orphaned run(s)`);
+  } catch (err) {
+    console.error("[server] orphan cleanup failed:", err.message);
   }
 
   app.listen(PORT, HOST, () => {

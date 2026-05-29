@@ -167,14 +167,20 @@ function buildChrome() {
     '<div class="rs-fields">' +
     '<label>Limit <span class="rs-sub">(blank or 0 = all)</span>' +
     '<input id="rsLimit" type="number" min="0" placeholder="e.g. 200"></label>' +
-    '<label>Delay per request (ms)' +
-    '<input id="rsDelay" type="number" min="0" value="1000"></label>' +
+    '<label>Delay min (ms)' +
+    '<input id="rsDelayMin" type="number" min="0" value="1000"></label>' +
+    '<label>Delay max (ms)' +
+    '<input id="rsDelayMax" type="number" min="0" value="5000"></label>' +
     '<label>Concurrency <span class="rs-sub">(1\u201310)</span>' +
     '<input id="rsConc" type="number" min="1" max="10" value="1"></label>' +
+    '<label>Auto-abort after <span class="rs-sub">(empty responses, 0=off)</span>' +
+    '<input id="rsAutoAbort" type="number" min="0" value="10"></label>' +
     "</div>" +
     '<div class="progress"><div class="progress-bar" id="rsBar"></div></div>' +
     '<div id="rsStats" class="rs-stats">Idle.</div>' +
     '<div id="rsErrors" class="rs-errors"></div>' +
+    '<div class="rs-runs"><div class="rs-runs-head">Recent runs</div>' +
+    '<div id="rsRuns" class="rs-runs-wrap"></div></div>' +
     "</div>" +
     '<footer><button id="rsAbort" disabled>Abort</button>' +
     '<button class="primary" id="rsStart">Start resync</button></footer>' +
@@ -242,7 +248,8 @@ function renderResync(s) {
     "</div>" +
     '<div class="rs-line rs-meta">elapsed ' + fmtElapsed(elapsed) + " &middot; " + rate + " req/s" +
     (s.lastError ? ' &middot; <span class="err">' + esc(s.lastError) + "</span>" : "") +
-    "</div>";
+    "</div>" +
+    (s.note ? '<div class="rs-line rs-note">' + esc(s.note) + "</div>" : "");
 
   renderResyncErrors(s);
 
@@ -301,13 +308,60 @@ function renderBanner(s) {
     " \u00b7 error " + (s.errored || 0);
 }
 
+function fmtDuration(startIso, endIso) {
+  if (!startIso) return "";
+  const start = new Date(startIso).getTime();
+  const end = endIso ? new Date(endIso).getTime() : Date.now();
+  return fmtElapsed(end - start);
+}
+
+function runStatusBadge(status) {
+  return '<span class="badge badge-' + esc(status) + '">' + esc(status) + "</span>";
+}
+
+async function loadRuns() {
+  const box = document.getElementById("rsRuns");
+  if (!box) return;
+  let runs;
+  try {
+    runs = await api("/api/resync/runs");
+  } catch (e) {
+    box.innerHTML = '<div class="hist-empty">Could not load runs.</div>';
+    return;
+  }
+  if (!runs.length) {
+    box.innerHTML = '<div class="hist-empty">No runs yet.</div>';
+    return;
+  }
+  const head =
+    "<tr><th>Started</th><th>Duration</th><th>Records</th><th>Changed</th>" +
+    "<th>Same</th><th>Error</th><th>Status</th></tr>";
+  const rows = runs
+    .map(
+      (r) =>
+        "<tr" + (r.note ? ' title="' + esc(r.note) + '"' : "") + ">" +
+        "<td>" + esc(fmtDateTime(r.started_at)) + "</td>" +
+        "<td>" + esc(fmtDuration(r.started_at, r.finished_at)) + "</td>" +
+        "<td>" + (r.total || 0) + "</td>" +
+        '<td class="ok">' + (r.changed || 0) + "</td>" +
+        "<td>" + (r.same || 0) + "</td>" +
+        '<td class="err">' + (r.errored || 0) + "</td>" +
+        "<td>" + runStatusBadge(r.status) + "</td>" +
+        "</tr>"
+    )
+    .join("");
+  box.innerHTML =
+    '<table class="hist-table runs-table"><thead>' + head + "</thead><tbody>" + rows + "</tbody></table>";
+}
+
 // Reflect the latest server state in both the banner and the modal.
 function applyResyncState(s) {
   renderResync(s);
   renderBanner(s);
   if (lastRunning && !s.running) {
-    // A run just finished: refresh the grid so edits show up.
+    // A run just finished: refresh the grid and the run history.
     if (s.processed) table.replaceData();
+    loadRuns();
   }
   lastRunning = !!s.running;
 }
@@ -337,21 +391,33 @@ function startMonitor() {
 function openResync() {
   document.getElementById("resyncOverlay").classList.add("show");
   monitorTick();
+  loadRuns();
 }
 
 function closeResync() {
   document.getElementById("resyncOverlay").classList.remove("show");
 }
 
+function numOr(id, fallback) {
+  const n = parseInt(document.getElementById(id).value, 10);
+  return Number.isNaN(n) ? fallback : n;
+}
+
 async function doResyncStart() {
-  const limit = parseInt(document.getElementById("rsLimit").value, 10);
-  const delayMs = parseInt(document.getElementById("rsDelay").value, 10);
-  const concurrency = parseInt(document.getElementById("rsConc").value, 10);
+  let delayMin = numOr("rsDelayMin", 1000);
+  let delayMax = numOr("rsDelayMax", 5000);
+  if (delayMax < delayMin) {
+    const t = delayMin;
+    delayMin = delayMax;
+    delayMax = t;
+  }
   try {
     await api("/api/resync/start", "POST", {
-      limit: Number.isNaN(limit) ? 0 : limit,
-      delayMs: Number.isNaN(delayMs) ? 1000 : delayMs,
-      concurrency: Number.isNaN(concurrency) ? 1 : concurrency,
+      limit: numOr("rsLimit", 0),
+      delayMin,
+      delayMax,
+      concurrency: numOr("rsConc", 1),
+      autoAbortAfter: numOr("rsAutoAbort", 10),
     });
     toast("Resync started");
   } catch (e) {

@@ -459,16 +459,37 @@ async function proxyScraper(path, method, body) {
 
 app.post("/api/resync/start", requireAuth, async (req, res) => {
   try {
-    const { limit, delayMs, concurrency } = req.body || {};
+    const { limit, delayMin, delayMax, delayMs, concurrency, autoAbortAfter } =
+      req.body || {};
     const { status, data } = await proxyScraper("/resync/start", "POST", {
       limit,
+      delayMin,
+      delayMax,
       delayMs,
       concurrency,
+      autoAbortAfter,
     });
     res.status(status).json(data);
   } catch (err) {
     console.error("[api/resync/start]", err);
     res.status(502).json({ error: "scraper service unreachable" });
+  }
+});
+
+// Recent resync runs (history). Reads resync_runs directly from the shared DB.
+app.get("/api/resync/runs", requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, started_at, finished_at, total, changed, same, errored,
+              status, note
+         FROM resync_runs
+        ORDER BY started_at DESC
+        LIMIT 25`
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("[api/resync/runs]", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
